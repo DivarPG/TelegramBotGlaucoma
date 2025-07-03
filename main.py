@@ -90,7 +90,7 @@ def invalidData(message):
 @bot.message_handler(commands=['start'])
 def startMessage(message):
     bot.send_message(message.chat.id,
-                     f'Емае, {message.from_user.first_name}... Короче надо придумать стартовое сообщение, Креативные директоры давайте.')
+                     f'Бот предоставляет возможность:\n/selfdiagnosis - Проводить самодиагностику\n/medicationsplan - Управлять планом лечения (добавлять, изменять, удалять препараты)')
 
 
 user_states = {}
