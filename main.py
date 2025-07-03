@@ -54,6 +54,29 @@ def init_db():
 
 init_db()
 
+days_mapping = {
+    'Понедельник': 'mon',
+    'Вторник': 'tue',
+    'Среда': 'wed',
+    'Четверг': 'thu',
+    'Пятница': 'fri',
+    'Суббота': 'sat',
+    'Воскресенье': 'sun',
+    'Ежедневно': 'mon,tue,wed,thu,fri,sat,sun',
+    'Только будни': 'mon,tue,wed,thu,fri',
+    'Только выходные': 'sat,sun'
+}
+
+ru_days = {
+    'mon': 'Понедельник',
+    'tue': 'Вторник',
+    'wed': 'Среда',
+    'thu': 'Четверг',
+    'fri': 'Пятница',
+    'sat': 'Суббота',
+    'sun': 'Воскресенье'
+}
+
 
 @bot.message_handler(
     content_types=['animation', 'audio', 'document', 'photo', 'sticker', 'story', 'video', 'video_note', 'voice',
@@ -273,22 +296,11 @@ def process_medication_name(message):
     )
 
 
-@bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == "SELECT_DAYS")
+@bot.message_handler(func=lambda message: user_states.get(message.from_user.id) in ["SELECT_DAYS", "EDIT_MED_DAYS"])
 def process_days_selection(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
-    days_mapping = {
-        'Понедельник': 'mon',
-        'Вторник': 'tue',
-        'Среда': 'wed',
-        'Четверг': 'thu',
-        'Пятница': 'fri',
-        'Суббота': 'sat',
-        'Воскресенье': 'sun',
-        'Ежедневно': 'mon,tue,wed,thu,fri,sat,sun',
-        'Только будни': 'mon,tue,wed,thu,fri',
-        'Только выходные': 'sat,sun'
-    }
+    current_state = user_states[user_id]
 
     if message.text == 'Завершить выбор дней':
         selected_days = user_temp_data[user_id].get('days', [])
@@ -296,13 +308,42 @@ def process_days_selection(message):
             bot.send_message(chat_id, "Необходимо выбрать как минимум один день")
             return
 
-        user_states[user_id] = "ENTER_TIMES"
-        bot.send_message(
-            chat_id,
-            "Введите время приема через запятую в формате ЧЧ:ММ. Пример: 08:00, 13:30, 20:15\n"
-            "Для каждого указанного времени будет создано отдельное напоминание",
-            reply_markup=types.ReplyKeyboardRemove()
-        )
+        if current_state == "SELECT_DAYS":
+            user_states[user_id] = "ENTER_TIMES"
+            bot.send_message(
+                chat_id,
+                "Введите время приема через запятую в формате ЧЧ:ММ. Пример: 08:00, 13:30, 20:15\n"
+                "Для каждого указанного времени будет создано отдельное напоминание",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
+        elif current_state == "EDIT_MED_DAYS":
+            selected_med = user_temp_data[user_id].get('selected_med')
+            if not selected_med:
+                bot.send_message(chat_id, "Ошибка: данные сессии утеряны")
+                clear_user_state(user_id)
+                return
+
+            med_id, med_name = selected_med
+            days_str = ','.join(selected_days)
+
+            conn = sqlite3.connect(DATABASE_NAME)
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE medications SET days = ? WHERE id = ?",
+                (days_str, med_id))
+            conn.commit()
+            conn.close()
+
+            bot.send_message(
+                chat_id,
+                f"Дни приема для препарата '{med_name}' успешно обновлены!",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
+
+            user_temp_data[user_id]['days'] = selected_days
+
+            clear_user_state(user_id)
+            handle_medications_plan(message)
         return
 
     day_code = days_mapping.get(message.text)
@@ -322,22 +363,12 @@ def process_days_selection(message):
 
     user_temp_data[user_id]['days'] = current_days
 
-    ru_days = {
-        'mon': 'Понедельник',
-        'tue': 'Вторник',
-        'wed': 'Среда',
-        'thu': 'Четверг',
-        'fri': 'Пятница',
-        'sat': 'Суббота',
-        'sun': 'Воскресенье'
-    }
     selected = [ru_days[d] for d in current_days]
     bot.send_message(
         chat_id,
         f"Текущий выбор дней: {', '.join(selected) or 'дни не выбраны'}\n"
-        'Продолжайте выбор или нажмите "Завершить выбор дней"'
+        "Продолжайте выбор или нажмите 'Завершить выбор дней'"
     )
-
 
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id) == "ENTER_TIMES")
 def process_times(message):
@@ -533,16 +564,16 @@ def handle_medications_plan(message):
 
                             time_left = next_datetime - now
                             day_name = {
-                                'mon': 'понедельник',
-                                'tue': 'вторник',
-                                'wed': 'среду',
-                                'thu': 'четверг',
-                                'fri': 'пятницу',
-                                'sat': 'субботу',
-                                'sun': 'воскресенье'
+                                'mon': 'в понедельник',
+                                'tue': 'во вторник',
+                                'wed': 'в среду',
+                                'thu': 'в четверг',
+                                'fri': 'в пятницу',
+                                'sat': 'в субботу',
+                                'sun': 'в воскресенье'
                             }.get(next_day, next_day)
 
-                            next_times.append((time_left, f"{day_name} в {time_str}"))
+                            next_times.append((time_left, f"{day_name}, {time_str}"))
                             break
 
                 except ValueError:
@@ -648,6 +679,7 @@ def handle_medication_actions(call):
             reply_markup=markup
         )
 
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith(('select_med_', 'select_del_')))
 def select_med_handler(call):
     user_id = call.from_user.id
@@ -657,17 +689,24 @@ def select_med_handler(call):
 
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT name FROM medications WHERE id = ?", (med_id,))
-    med_name = cursor.fetchone()[0]
+    cursor.execute("SELECT name, days FROM medications WHERE id = ?", (med_id,))
+    med_data = cursor.fetchone()
     conn.close()
 
-    user_temp_data[user_id] = {'selected_med': (med_id, med_name)}
+    if not med_data:
+        bot.send_message(chat_id, "Препарат не найден")
+        return
+
+    med_name, current_days = med_data
+
+    user_temp_data[user_id] = {'selected_med': (med_id, med_name), 'days': current_days.split(',')}
 
     if action == 'med':
         user_states[user_id] = "SELECT_EDIT_ACTION"
 
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
+            types.InlineKeyboardButton('Изменить дни приема', callback_data='edit_days'),
             types.InlineKeyboardButton('Изменить время приема', callback_data='edit_time'),
             types.InlineKeyboardButton('Изменить описание', callback_data='edit_desc'),
             types.InlineKeyboardButton('Отмена', callback_data='cancel_edit_action')
@@ -676,7 +715,7 @@ def select_med_handler(call):
         bot.edit_message_text(
             chat_id=chat_id,
             message_id=call.message.message_id,
-            text=f'Выберите действие для препарата "{med_name}":',
+            text=f"Выберите действие для препарата '{med_name}':",
             reply_markup=markup
         )
 
@@ -696,7 +735,9 @@ def select_med_handler(call):
             reply_markup=markup
         )
 
-@bot.callback_query_handler(func=lambda call: call.data in ['edit_time', 'edit_desc', 'cancel_edit_action'])
+
+@bot.callback_query_handler(
+    func=lambda call: call.data in ['edit_days', 'edit_time', 'edit_desc', 'cancel_edit_action'])
 def handle_edit_action(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
@@ -713,7 +754,36 @@ def handle_edit_action(call):
 
     med_id, med_name = selected_med
 
-    if call.data == 'edit_time':
+    if call.data == 'edit_days':
+        user_states[user_id] = "EDIT_MED_DAYS"
+
+        current_days = user_temp_data[user_id].get('days', [])
+        selected = [ru_days[d] for d in current_days]
+
+        markup = types.ReplyKeyboardMarkup(row_width=3, resize_keyboard=True)
+        buttons = [
+            types.KeyboardButton('Понедельник'),
+            types.KeyboardButton('Вторник'),
+            types.KeyboardButton('Среда'),
+            types.KeyboardButton('Четверг'),
+            types.KeyboardButton('Пятница'),
+            types.KeyboardButton('Суббота'),
+            types.KeyboardButton('Воскресенье'),
+            types.KeyboardButton('Ежедневно'),
+            types.KeyboardButton('Только будни'),
+            types.KeyboardButton('Только выходные'),
+            types.KeyboardButton('Завершить выбор дней')
+        ]
+        markup.add(*buttons)
+
+        bot.send_message(
+            chat_id,
+            f"Текущие дни приема: {', '.join(selected) or 'не выбраны'}\n"
+            "Выберите новые дни приема для препарата:",
+            reply_markup=markup
+        )
+
+    elif call.data == 'edit_time':
         user_states[user_id] = "EDIT_MED_TIMES"
         bot.edit_message_text(
             chat_id=chat_id,
